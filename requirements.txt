@@ -1,0 +1,36 @@
+# AutoLabel Dock · 运行期依赖
+# ---------------------------------------------------------------------------
+# 安装顺序（详见 INSTALL.md §3）：
+#   1) 先装与本机 CUDA 匹配的 torch（必须，否则会被装成 CPU 版）：
+#        pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#      纯 CPU：pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   2) 再装下面这些：
+#        pip install -r requirements.txt
+#
+# 备注：torch / torchvision 不写在这里，是因为 CUDA 版本必须由用户按本机环境选择；
+#       其余依赖（ultralytics 等）会通过 pip 自动拉取最新兼容的 torch，
+#       所以务必先单独装好 torch 再装本文件。
+# ---------------------------------------------------------------------------
+
+# --- GUI ---
+PyQt5>=5.15
+pyqtgraph>=0.13
+
+# --- 深度学习 ---
+ultralytics>=8.0
+
+# --- 图像 / 视频 ---
+numpy>=1.23
+Pillow>=9.0
+opencv-python>=4.5
+
+# --- 数据 / 工具 ---
+PyYAML>=6.0
+packaging>=20.0
+
+# ---------------------------------------------------------------------------
+# 可选依赖：LocateAnything 文本标注后端（NVIDIA LocateAnything-3B）
+# 见 INSTALL.md §4，体积大、依赖重，默认不装。需要时执行：
+#   pip install -e ".[locateanything]"
+# 会额外装：transformers>=4.57,<4.58  accelerate  bitsandbytes  decord
+# ---------------------------------------------------------------------------
