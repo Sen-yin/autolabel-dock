@@ -70,6 +70,7 @@ class PredictorProtocol(Protocol):
         project_classes: list[str] | None = None,
         class_match_mode: str = "class_id",
         kpt_labels: list[str] | None = None,
+        trained_classes: list[str] | None = None,
     ) -> list[Annotation]:
         ...
 
@@ -81,6 +82,7 @@ class PredictorProtocol(Protocol):
         project_classes: list[str] | None = None,
         class_match_mode: str = "class_id",
         kpt_labels: list[str] | None = None,
+        trained_classes: list[str] | None = None,
     ) -> tuple[list[Annotation], tuple[int, int]]:
         ...
 

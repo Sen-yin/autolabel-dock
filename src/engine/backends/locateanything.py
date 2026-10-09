@@ -763,8 +763,14 @@ class LocateAnythingPredictor:
         project_classes: list[str] | None = None,
         class_match_mode: str = "class_id",
         kpt_labels: list[str] | None = None,
+        trained_classes: list[str] | None = None,
     ) -> list:
-        """Run open-vocabulary detection. conf/iou/class_match_mode ignored."""
+        """Run open-vocabulary detection. conf/iou/class_match_mode ignored.
+
+        ``trained_classes`` is accepted for ``PredictorProtocol`` parity but
+        unused — LA is open-vocabulary and class names come from the
+        prompt + project classes, not from a fixed model output vocabulary.
+        """
         annotations, _ = self._run(image_path, project_classes)
         return annotations
 
@@ -776,8 +782,13 @@ class LocateAnythingPredictor:
         project_classes: list[str] | None = None,
         class_match_mode: str = "class_id",
         kpt_labels: list[str] | None = None,
+        trained_classes: list[str] | None = None,
     ) -> tuple[list, tuple[int, int]]:
-        """Run detection and also report image (w, h) reported by the worker."""
+        """Run detection and also report image (w, h) reported by the worker.
+
+        ``trained_classes`` is accepted for ``PredictorProtocol`` parity but
+        unused (see ``predict``).
+        """
         return self._run(image_path, project_classes)
 
     def predict_classify(

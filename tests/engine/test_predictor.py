@@ -17,6 +17,11 @@ class TestPredictor:
         result.boxes = boxes
         result.keypoints = None
         result.orig_shape = (480, 640)
+        # When the lookup table (``project_classes``) disagrees with the
+        # model's own metadata, the model's reported name wins (and a
+        # warning is logged). This is the safe fallback — silently using
+        # the project class list is what scrambles labels after a project
+        # class list change post-training.
         mock_model.names = {0: "totally-different-name"}
         mock_model.predict.return_value = [result]
 
@@ -27,8 +32,8 @@ class TestPredictor:
         )
 
         assert len(annotations) == 1
-        assert annotations[0].class_name == "person"
         assert annotations[0].class_id == 0
+        assert annotations[0].class_name == "totally-different-name"
 
     def test_predict_returns_annotations(self):
         mock_model = MagicMock()
@@ -210,6 +215,72 @@ class TestPredictor:
         annotations, img_size = predictor.predict_with_size("test.jpg", conf=0.5, iou=0.45)
 
         assert img_size == (1920, 1080)
+
+    def test_trained_classes_snapshot_overrides_project_list_for_id_lookup(self):
+        """The trained_classes snapshot is the source of truth for ID→name.
+
+        Regression test for the bug where auto-label produced wrong class
+        names after a project's class list drifted (reordered, or new
+        classes added) since the model was trained. The model's output
+        class IDs index into trained_classes, NOT project_classes.
+        """
+        mock_model = MagicMock()
+        boxes = MagicMock()
+        boxes.cls = torch.tensor([0, 1])
+        boxes.conf = torch.tensor([0.95, 0.80])
+        boxes.xywhn = torch.tensor([[0.5, 0.4, 0.3, 0.6], [0.2, 0.3, 0.1, 0.2]])
+        result = MagicMock()
+        result.boxes = boxes
+        result.keypoints = None
+        result.orig_shape = (480, 640)
+        # Model was trained with B at id=0 and A at id=1 (e.g. an
+        # alphabetical sort that flipped the original project order).
+        mock_model.names = {0: "B", 1: "A"}
+        mock_model.predict.return_value = [result]
+
+        predictor = Predictor(mock_model)
+        annotations = predictor.predict(
+            "test.jpg",
+            project_classes=["A", "B", "C"],  # live project has A first
+            class_match_mode="class_id",
+            trained_classes=["B", "A"],       # but model was trained with B first
+        )
+
+        assert len(annotations) == 2
+        # id=0 → "B" (from trained_classes snapshot), not "A" (which would
+        # have come from project_classes[0] under the old buggy behavior).
+        assert annotations[0].class_name == "B"
+        assert annotations[0].class_id == 0
+        assert annotations[1].class_name == "A"
+        assert annotations[1].class_id == 1
+
+    def test_lookup_mismatch_uses_model_name_with_warning(self):
+        """When neither snapshot nor project list matches model.names, fall
+        back to the model-reported name (safer than a guessed class)."""
+        mock_model = MagicMock()
+        boxes = MagicMock()
+        boxes.cls = torch.tensor([0])
+        boxes.conf = torch.tensor([0.91])
+        boxes.xywhn = torch.tensor([[0.5, 0.5, 0.3, 0.3]])
+        result = MagicMock()
+        result.boxes = boxes
+        result.keypoints = None
+        result.orig_shape = (480, 640)
+        mock_model.names = {0: "real_class"}
+        mock_model.predict.return_value = [result]
+
+        predictor = Predictor(mock_model)
+        annotations = predictor.predict(
+            "test.jpg",
+            project_classes=["stale_class"],
+            class_match_mode="class_id",
+            # trained_classes deliberately wrong — should be ignored in favor
+            # of the model-reported name with a loud warning.
+            trained_classes=["another_stale_class"],
+        )
+
+        assert len(annotations) == 1
+        assert annotations[0].class_name == "real_class"
 
 
 class TestClassNames:

@@ -196,3 +196,39 @@ class TestModelInfoTrainParams:
         }
         info = ModelInfo.from_dict(legacy)
         assert info.train_params == {}
+
+
+class TestModelInfoTrainedClasses:
+    """Snapshot of the project class list at training time.
+
+    The predictor uses this for class_id lookup so that reordering or adding
+    project classes after training does not scramble auto-label output.
+    See ``Predictor._run`` for the full rationale.
+    """
+
+    def test_trained_classes_default_is_empty(self):
+        info = ModelInfo(
+            name="m", path="m.pt", task="detect",
+            base_model="yolov8n.pt", classes=["cat"],
+        )
+        assert info.trained_classes == []
+
+    def test_trained_classes_roundtrip(self):
+        info = ModelInfo(
+            name="m", path="m.pt", task="detect",
+            base_model="yolov8n.pt", classes=["B", "A"],  # live order
+            trained_classes=["A", "B"],                    # training order
+        )
+        restored = ModelInfo.from_dict(info.to_dict())
+        assert restored.trained_classes == ["A", "B"]
+        assert restored.classes == ["B", "A"]
+
+    def test_from_dict_legacy_falls_back_to_classes(self):
+        """Models registered before the field existed should still load —
+        their declared ``classes`` are the best available proxy."""
+        legacy = {
+            "id": "old", "name": "m", "path": "m.pt", "task": "detect",
+            "base_model": "yolov8n.pt", "classes": ["A", "B"],
+        }
+        info = ModelInfo.from_dict(legacy)
+        assert info.trained_classes == ["A", "B"]

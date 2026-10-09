@@ -27,6 +27,11 @@ class ModelController:
         self._project: ProjectManager | None = None
         self._models_dir: Path | None = None
         self._batch_worker: BatchPredictWorker | None = None
+        # id of the most recently loaded registry-backed model. Cleared by
+        # ``unload`` and ``set_predictor`` (which injects a non-registry
+        # predictor like LocateAnything). ``AutoLabelController`` reads this
+        # to pull ``trained_classes`` for correct ID→name mapping.
+        self._current_model_id: str | None = None
 
     @property
     def predictor(self) -> PredictorProtocol | None:
@@ -62,6 +67,10 @@ class ModelController:
 
         predictor = self._predictor
         self._predictor = None
+        # Injected predictors (LA) have no associated ModelInfo — clearing the
+        # id forces the autolabel controller to fall back to live project
+        # classes (which is the right behavior for open-vocabulary flows).
+        self._current_model_id = None
         if predictor is not None:
             release = getattr(predictor, "release", None)
             if callable(release):
@@ -84,8 +93,15 @@ class ModelController:
     def set_predictor(self, predictor: PredictorProtocol | None) -> None:
         """Inject a predictor directly (e.g. a LocateAnything runtime that is
         not backed by the ModelRegistry / file path). Existing auto-label flows
-        read ``self._predictor`` and work unchanged."""
+        read ``self._predictor`` and work unchanged.
+
+        Injected predictors have no associated ``ModelInfo`` and therefore no
+        ``trained_classes`` snapshot — the autolabel controller will fall back
+        to the live ``project_classes`` for ID lookup, which is the correct
+        behavior for open-vocabulary flows.
+        """
         self._predictor = predictor
+        self._current_model_id = None
 
     def load_model(self, model_id: str) -> bool:
         """Load a model for inference. Returns True on success."""
@@ -106,6 +122,11 @@ class ModelController:
                 return False
             backend = get_backend(model_info.backend_id)
             self._predictor = backend.load_predictor(model_path, model_info)
+            # Remember which registry entry was loaded so the autolabel
+            # controller can pull ``trained_classes`` from it on subsequent
+            # inference calls. Without this, a project class list that
+            # drifted after training would scramble the predicted labels.
+            self._current_model_id = model_id
             logger.info(
                 "Loaded model: %s from %s via %s",
                 model_info.name, model_path, backend.backend_id,
@@ -115,6 +136,20 @@ class ModelController:
             logger.error("Failed to load model: %s", e, exc_info=True)
             QMessageBox.warning(self._parent, "加载失败", f"模型加载失败: {e}")
             return False
+
+    def get_trained_classes(self) -> list[str] | None:
+        """Snapshot of the loaded model's trained class list, or None.
+
+        The auto-label controller calls this on every inference so the
+        predictor can map output IDs to the correct class names even when
+        the project class list has changed since training.
+        """
+        if not self._current_model_id or not self._registry:
+            return None
+        info = self._registry.get(self._current_model_id)
+        if info is None:
+            return None
+        return list(info.trained_classes) if info.trained_classes else None
 
     def inspect_model_structure(self, model_path: str | Path) -> list[LayerInfo]:
         """Parse a .pt file's layer hierarchy on CPU. Thin passthrough to
@@ -231,8 +266,16 @@ class ModelController:
         conf: float = 0.5,
         iou: float = 0.45,
         class_match_mode: str = "class_id",
+        trained_classes: list[str] | None = None,
     ) -> list:
-        """Run single-image prediction. Returns annotations list."""
+        """Run single-image prediction. Returns annotations list.
+
+        ``trained_classes`` is the snapshot of project classes at training
+        time — pass it from the currently-loaded ``ModelInfo`` so the
+        predictor can map output IDs back to the right class names even
+        when the live project class list has drifted (e.g. user reordered
+        or added classes since training).
+        """
         if not self._predictor:
             QMessageBox.information(self._parent, "提示", "请先在模型面板中加载一个模型")
             return []
@@ -243,6 +286,7 @@ class ModelController:
                 iou=iou,
                 project_classes=classes,
                 class_match_mode=class_match_mode,
+                trained_classes=trained_classes,
             )
         except (RuntimeError, OSError, ValueError) as e:
             logger.error("Auto-label failed: %s", e, exc_info=True)
@@ -256,6 +300,7 @@ class ModelController:
         conf: float = 0.5,
         iou: float = 0.45,
         class_match_mode: str = "class_id",
+        trained_classes: list[str] | None = None,
     ) -> SinglePredictWorker | None:
         """Build a background worker for single-image detection/pose inference.
 
@@ -264,6 +309,8 @@ class ModelController:
         predictor is loaded — mirroring ``predict_single``'s guard so the
         caller can bail without special-casing. The caller owns connecting the
         worker's ``done`` / ``error`` signals and starting it.
+
+        ``trained_classes`` is forwarded to the worker (see ``predict_single``).
         """
         if not self._predictor:
             QMessageBox.information(self._parent, "提示", "请先在模型面板中加载一个模型")
@@ -275,6 +322,7 @@ class ModelController:
             iou=iou,
             project_classes=classes,
             class_match_mode=class_match_mode,
+            trained_classes=trained_classes,
         )
 
     def predict_single_classify(

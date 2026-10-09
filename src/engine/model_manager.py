@@ -33,6 +33,13 @@ class ModelInfo:
     backend_version: str = ""
     backend_runtime: str = DEFAULT_BACKEND_RUNTIME
     backend_metadata: dict = field(default_factory=dict)
+    # Snapshot of the project's class list AT TRAINING TIME. The model's
+    # internal class IDs index into this list, NOT the live project classes.
+    # When the user later adds/removes/reorders classes, the live list can
+    # drift from what the model learned — auto-label must use this snapshot
+    # to look up class names (otherwise the predicted ID resolves to the
+    # wrong project class and labels appear scrambled).
+    trained_classes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -52,6 +59,7 @@ class ModelInfo:
             "backend_version": self.backend_version,
             "backend_runtime": self.backend_runtime,
             "backend_metadata": self.backend_metadata,
+            "trained_classes": self.trained_classes,
         }
 
     @classmethod
@@ -73,6 +81,10 @@ class ModelInfo:
             backend_version=d.get("backend_version", ""),
             backend_runtime=d.get("backend_runtime", DEFAULT_BACKEND_RUNTIME),
             backend_metadata=d.get("backend_metadata", {}),
+            # Fall back to ``classes`` so models registered before this field
+            # existed still load — their declared classes are the best
+            # available proxy for what the model actually learned.
+            trained_classes=d.get("trained_classes", d.get("classes", [])),
         )
 
 

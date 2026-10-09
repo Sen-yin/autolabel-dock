@@ -85,10 +85,12 @@ class Predictor:
         project_classes: list[str] | None = None,
         class_match_mode: str = "class_id",
         kpt_labels: list[str] | None = None,
+        trained_classes: list[str] | None = None,
     ) -> list[Annotation]:
         """Run inference and return list of Annotations."""
         annotations, _ = self._run(
             image_path, conf, iou, project_classes, class_match_mode, kpt_labels,
+            trained_classes,
         )
         return annotations
 
@@ -181,10 +183,12 @@ class Predictor:
         project_classes: list[str] | None = None,
         class_match_mode: str = "class_id",
         kpt_labels: list[str] | None = None,
+        trained_classes: list[str] | None = None,
     ) -> tuple[list[Annotation], tuple[int, int]]:
         """Run inference and return annotations + image size (w, h)."""
         return self._run(
             image_path, conf, iou, project_classes, class_match_mode, kpt_labels,
+            trained_classes,
         )
 
     def _run(
@@ -195,6 +199,7 @@ class Predictor:
         project_classes: list[str] | None,
         class_match_mode: str,
         kpt_labels: list[str] | None,
+        trained_classes: list[str] | None = None,
     ) -> tuple[list[Annotation], tuple[int, int]]:
         results = self.model.predict(
             source=str(image_path),
@@ -237,10 +242,39 @@ class Predictor:
             confidence = round(float(boxes.conf[i].item()), 4)
             raw_class_name = self._resolve_model_class_name(names, cls_id)
             project_match = None
+            # ``trained_classes`` is the snapshot of the project class list at
+            # the time the model was trained. The model's output class IDs
+            # index into THIS list, not the current ``project_classes`` — which
+            # the user may have reordered or mutated since training. Using the
+            # live project list for ID lookup is what causes labels to appear
+            # scrambled after a re-train or class change. Fallback order:
+            # explicit ``trained_classes`` -> ``project_classes`` -> model
+            # metadata (last resort).
+            id_lookup_classes = trained_classes or project_classes
             if project_classes:
                 if class_match_mode == "class_id":
-                    if 0 <= cls_id < len(project_classes):
-                        project_match = (project_classes[cls_id], cls_id)
+                    if id_lookup_classes and 0 <= cls_id < len(id_lookup_classes):
+                        looked_up_name = id_lookup_classes[cls_id]
+                        # Cross-validation: if the model's own metadata
+                        # disagrees with the looked-up class name, the lookup
+                        # table itself is misaligned with what the model
+                        # learned. Surface it loudly — silently returning
+                        # the wrong name is the bug we're fixing here. Fall
+                        # back to the model's own class name so the label is
+                        # at least the right one, even if it's not in the
+                        # project class list.
+                        if names and looked_up_name != raw_class_name:
+                            source = "trained_classes" if trained_classes else "project_classes"
+                            logger.warning(
+                                "Class ID %d lookup mismatch: %s[%d]='%s' "
+                                "but model reports '%s'. Using model-reported name to avoid "
+                                "wrong labels; consider re-training or switching to "
+                                "class_name match mode.",
+                                cls_id, source, cls_id, looked_up_name, raw_class_name,
+                            )
+                            project_match = (raw_class_name, cls_id)
+                        else:
+                            project_match = (looked_up_name, cls_id)
                 elif class_match_mode == "class_name":
                     project_match = project_class_lookup.get(self._normalize_class_name(raw_class_name))
                 else:

@@ -155,6 +155,7 @@ class BatchPredictWorker(QThread):
         class_match_mode: str = "class_id",
         kpt_labels: list[str] | None = None,
         task: str = "detect",
+        trained_classes: list[str] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -166,6 +167,10 @@ class BatchPredictWorker(QThread):
         self._class_match_mode = class_match_mode
         self._kpt_labels = kpt_labels
         self._task = task
+        # Snapshot of project classes at training time — predictor uses this
+        # to map predicted IDs back to the right class name. See
+        # ``Predictor._run`` for the full rationale.
+        self._trained_classes = trained_classes
         self._cancelled = threading.Event()
 
     def cancel(self) -> None:
@@ -234,6 +239,7 @@ class BatchPredictWorker(QThread):
                 project_classes=self._project_classes,
                 class_match_mode=self._class_match_mode,
                 kpt_labels=self._kpt_labels,
+                trained_classes=self._trained_classes,
             )
             self.image_done.emit(str(img_path), payload, img_size)
             self.progress.emit(i + 1, total)
@@ -269,6 +275,7 @@ class SinglePredictWorker(QThread):
         iou: float = 0.45,
         project_classes: list[str] | None = None,
         class_match_mode: str = "class_id",
+        trained_classes: list[str] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -278,6 +285,7 @@ class SinglePredictWorker(QThread):
         self._iou = iou
         self._project_classes = project_classes
         self._class_match_mode = class_match_mode
+        self._trained_classes = trained_classes
 
     def run(self) -> None:
         try:
@@ -287,6 +295,7 @@ class SinglePredictWorker(QThread):
                 iou=self._iou,
                 project_classes=self._project_classes,
                 class_match_mode=self._class_match_mode,
+                trained_classes=self._trained_classes,
             )
             self.done.emit(annotations)
         except Exception as e:

@@ -141,6 +141,19 @@ class AutoLabelController(QObject):
 
     # ── Single image ─────────────────────────────────────────────
 
+    def _current_trained_classes(self) -> list[str] | None:
+        """Snapshot of the loaded model's trained class list, or None.
+
+        The predictor uses this to map output class IDs back to the correct
+        project class name, even if the user reordered or added classes
+        since the model was trained. Returns ``None`` when no model is
+        loaded, the model was injected (e.g. LocateAnything) rather than
+        registered, or the registry entry has no ``trained_classes`` field.
+        """
+        if not self._model_ctrl:
+            return None
+        return self._model_ctrl.get_trained_classes()
+
     def label_current(self) -> None:
         """Auto-label the currently focused image (task_type dispatch inside)."""
         if not self._label_panel or not self._project:
@@ -160,6 +173,7 @@ class AutoLabelController(QObject):
             return
 
         params = self._params_provider()
+        trained_classes = self._current_trained_classes()
         # Slow backends (LocateAnything) block for seconds inside predict().
         # On a single-GPU box the X server shares the same card, so running
         # that on the Qt/X event loop stalls — and can crash — the desktop.
@@ -175,6 +189,7 @@ class AutoLabelController(QObject):
             conf=params.conf,
             iou=params.iou,
             class_match_mode=params.class_match_mode,
+            trained_classes=trained_classes,
         )
         self._apply_single_result(annotations, params.overlap_iou)
 
@@ -221,6 +236,7 @@ class AutoLabelController(QObject):
             conf=params.conf,
             iou=params.iou,
             class_match_mode=params.class_match_mode,
+            trained_classes=self._current_trained_classes(),
         )
         if worker is None:
             return
@@ -307,6 +323,7 @@ class AutoLabelController(QObject):
             project_classes=self._project.config.classes,
             class_match_mode=params.class_match_mode,
             task=self._project.config.task_type,
+            trained_classes=self._current_trained_classes(),
         )
         self._batch_skipped = 0
         self._batch_failed = 0

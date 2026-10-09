@@ -196,12 +196,23 @@ class TrainController:
         backend = get_backend(self._train_config.backend_id) if self._train_config else get_backend()
         probe = backend.probe()
         model_path = f"{self._run_name}/weights/best.pt"
+        # ``trained_classes`` snapshots the class list the model was actually
+        # trained against (resolved from the data.yaml it consumed). This is
+        # what the model's output class IDs index into — not the live
+        # ``project.config.classes`` which the user may have reordered or
+        # added to since training. Auto-label uses this snapshot to map
+        # predicted IDs back to the correct class name.
+        trained_classes = (
+            self._prepared_classes
+            if self._has_prepared_classes
+            else project.config.classes
+        )
         model_info = ModelInfo(
             name=f"{task}-{len(registry.list_models()) + 1}",
             path=model_path,
             task=task,
             base_model=base_model,
-            classes=classes,
+            classes=trained_classes,
             metrics=metrics,
             epochs=epochs,
             dataset_size=self._dataset_size,
@@ -211,6 +222,7 @@ class TrainController:
             backend_version=probe.version,
             backend_runtime=probe.runtime,
             backend_metadata=probe.metadata,
+            trained_classes=trained_classes,
         )
         registry.register(model_info)
         registry.save()

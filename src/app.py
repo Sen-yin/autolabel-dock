@@ -400,7 +400,11 @@ class MainWindow(QMainWindow):
 
         self._script_tool_panel.set_working_directory(project_manager.project_dir)
         self._train_panel.set_task_type(project_manager.config.task_type)
-        self._model_panel.set_models(self._model_registry.list_models())
+        # Push the live project class list so the model panel can surface
+        # class-drift warnings against each registered model's trained_classes.
+        if self._model_panel:
+            self._model_panel.set_project_classes(project_manager.config.classes)
+            self._model_panel.set_models(self._model_registry.list_models())
         self._train_panel.set_registered_models(self._model_registry.list_models())
 
         self.tab_widget.setCurrentWidget(self._label_panel)
@@ -534,6 +538,10 @@ class MainWindow(QMainWindow):
                 # Default set_project flushes the old view's pending edit
                 # before teardown — the rebuild must not drop canvas edits.
                 self._label_panel.set_project(self._project)
+            # Refresh the model panel so any class-drift warning reflects
+            # the new project class list.
+            if self._model_panel:
+                self._model_panel.set_project_classes(self._project.config.classes)
 
     def _on_tag_manager(self) -> None:
         """Open the project-level tag CRUD dialog."""

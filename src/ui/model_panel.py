@@ -108,6 +108,10 @@ class ModelPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._models: list[ModelInfo] = []
+        # Live project class list — pushed in by MainWindow when the project
+        # is opened or its class list changes, used to surface class-drift
+        # warnings on the selected model (see ``_refresh_detail_warning``).
+        self._project_classes: list[str] = []
         self._init_ui()
         self._connect_signals()
 
@@ -178,6 +182,14 @@ class ModelPanel(QWidget):
         self._detail_backend = QLabel("")
         self._detail_train_params = QLabel("")
         self._detail_train_params.setTextFormat(Qt.RichText)
+        # Class-drift warning: shown when the currently selected model's
+        # ``trained_classes`` differ from the live project class list. The
+        # predictor uses the snapshot for ID lookup (so labels stay correct)
+        # but a drift is still important to surface so the user knows their
+        # project class list is out of sync with what the model learned.
+        self._detail_class_warning = QLabel("")
+        self._detail_class_warning.setWordWrap(True)
+        self._detail_class_warning.setStyleSheet(text_style("warning"))
 
         for label_name, widget in [
             ("名称:", self._detail_name),
@@ -190,6 +202,7 @@ class ModelPanel(QWidget):
             ("数据集:", self._detail_dataset),
             ("Backend:", self._detail_backend),
             ("训练参数:", self._detail_train_params),
+            ("类别变更:", self._detail_class_warning),
         ]:
             widget.setStyleSheet(text_style("body"))
             widget.setWordWrap(True)
@@ -272,6 +285,9 @@ class ModelPanel(QWidget):
 
         self._model_list.blockSignals(False)
         logger.info("Model list updated: %d models", len(models))
+        # Re-render the currently-selected detail with the (possibly updated)
+        # project class list, so the class-drift warning stays in sync.
+        self._refresh_detail_warning()
 
     def set_current_model_name(self, name: str) -> None:
         """Display the currently loaded model name."""
@@ -315,6 +331,54 @@ class ModelPanel(QWidget):
             self._detail_train_params.setText(
                 _format_train_params(model.train_params, model.task)
             )
+            self._refresh_detail_warning(model)
+
+    def _refresh_detail_warning(self, model: ModelInfo | None = None) -> None:
+        """Update the class-drift warning for the currently selected model.
+
+        Compares the model's ``trained_classes`` against the current project
+        class list. Differences are surfaced so the user knows their project
+        class list has drifted from what the model learned; the predictor
+        still uses the snapshot so labels stay correct, but a re-train is
+        often the right fix.
+        """
+        if model is None:
+            row = self._model_list.currentRow()
+            if 0 <= row < len(self._models):
+                model = self._models[row]
+        if model is None:
+            self._detail_class_warning.setText("")
+            return
+        trained = list(model.trained_classes or model.classes)
+        if not trained:
+            self._detail_class_warning.setText("")
+            return
+        if not self._project_classes:
+            self._detail_class_warning.setText(
+                "当前项目未设置类别，无法对比。"
+            )
+            return
+        missing = [c for c in trained if c not in self._project_classes]
+        added = [c for c in self._project_classes if c not in trained]
+        if not missing and not added:
+            self._detail_class_warning.setText("")
+            return
+        parts = []
+        if missing:
+            parts.append(f"训练时存在但项目已移除: {', '.join(missing)}")
+        if added:
+            parts.append(f"新增的类别: {', '.join(added)}")
+        parts.append("自动标注仍可正常使用（模型已用训练时的类别映射），但建议重新训练。")
+        self._detail_class_warning.setText("\n".join(parts))
+
+    def set_project_classes(self, classes: list[str] | None) -> None:
+        """Update the live project class list used for drift detection.
+
+        Called by MainWindow when the project is opened or its class list
+        changes. Re-renders the warning for the currently selected model.
+        """
+        self._project_classes = list(classes) if classes else []
+        self._refresh_detail_warning()
 
     def _get_selected_id(self) -> str | None:
         item = self._model_list.currentItem()
