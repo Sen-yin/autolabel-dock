@@ -11,19 +11,20 @@ import shutil
 from collections import OrderedDict
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QRect
 from PyQt5.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QSplitter,
-    QPushButton,
+    QApplication,
     QCheckBox,
     QComboBox,
-    QToolBar,
-    QToolButton,
+    QHBoxLayout,
     QLabel,
     QMessageBox,
+    QPushButton,
+    QSplitter,
+    QToolBar,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from src.core.annotation import Annotation, ImageAnnotation
@@ -652,6 +653,25 @@ class DetectPoseView(TaskView):
     def _on_annotations_changed(self) -> None:
         self._sync_annotations_to_panel()
 
+    def _clamp_to_screen(self, pos: QPoint, widget) -> QPoint:
+        """Clamp a global screen position so ``widget`` stays on-screen.
+
+        ``widget.sizeHint()`` is the size we move to, so we clamp ``pos`` so
+        the resulting ``widget.rect()`` fits inside the screen that contains
+        the original ``pos``. Returns the (possibly adjusted) position.
+        """
+        screen = QApplication.screenAt(pos)
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return pos
+        avail: QRect = screen.availableGeometry()
+        size = widget.sizeHint()
+        w, h = size.width(), size.height()
+        x = max(avail.left(), min(pos.x(), avail.right() - w + 1))
+        y = max(avail.top(), min(pos.y(), avail.bottom() - h + 1))
+        return QPoint(x, y)
+
     def _show_class_picker(self, default_class: str | None, px: float, py: float) -> str | None:
         if not self._project:
             return None
@@ -664,7 +684,18 @@ class DetectPoseView(TaskView):
             default_class=default_class,
             parent=self,
         )
-        global_pos = self._canvas.mapToGlobal(QPoint(int(px), int(py)))
+        # px, py are canvas widget pixel coords. The image is drawn at
+        # canvas._offset_x, _offset_y. Subtracting gives the image-relative
+        # position on the canvas, which is what mapToGlobal needs to land
+        # on the clicked image pixel (not the canvas top-left, which is
+        # off the image whenever the image is smaller than the canvas).
+        # Then clamp to the available screen rect so the dialog never
+        # spawns off-screen on a small display / high DPI / right- or
+        # bottom-edge click.
+        canvas_pt = QPoint(int(px - self._canvas._offset_x),
+                           int(py - self._canvas._offset_y))
+        global_pos = self._canvas.mapToGlobal(canvas_pt)
+        global_pos = self._clamp_to_screen(global_pos, picker)
         picker.move(global_pos)
         if not picker.exec_():
             return None
@@ -785,7 +816,10 @@ class DetectPoseView(TaskView):
             default_label=default_label,
             parent=self,
         )
-        global_pos = self._canvas.mapToGlobal(QPoint(int(px), int(py)))
+        canvas_pt = QPoint(int(px - self._canvas._offset_x),
+                           int(py - self._canvas._offset_y))
+        global_pos = self._canvas.mapToGlobal(canvas_pt)
+        global_pos = self._clamp_to_screen(global_pos, picker)
         picker.move(global_pos)
 
         if not picker.exec_():
@@ -1150,11 +1184,32 @@ class DetectPoseView(TaskView):
             self._canvas.clear()
             self._ann_panel.set_annotations([])
 
+        # Snapshot the file list BEFORE refresh, so we can find the row
+        # where the deleted set started in the OLD ordering. After the
+        # refresh the list is shorter, so the same numeric index points
+        # at a different image.
+        old_paths_snapshot = self._file_list.get_paths()
         remaining = self._project.list_images()
-        self._file_list.refresh_paths(remaining)
-
         if current_in_deleted and remaining:
-            self._file_list.setCurrentRow(0)
+            # Land on the first surviving image at or after the deleted
+            # range, not row 0. The user just deleted items they were
+            # looking at; jumping to the very top forces them to scroll
+            # back down to keep annotating. Pick the neighbor that used
+            # to sit just after the deleted set (or the last image if
+            # we deleted the tail).
+            deleted_set = {str(p) for p in paths}
+            first_deleted_idx = 0
+            for i, op in enumerate(old_paths_snapshot):
+                if str(op) in deleted_set:
+                    first_deleted_idx = i
+                    break
+            # The new list has the same prefix and is shorter by the
+            # deleted count, so the same numeric index lands on the
+            # image that used to come right after the first deleted one.
+            new_idx = min(first_deleted_idx, len(remaining) - 1)
+            self._file_list.refresh_paths(remaining, selected_row=new_idx)
+        else:
+            self._file_list.refresh_paths(remaining)
 
         self._refresh_project_stats()
         self.status_changed.emit(

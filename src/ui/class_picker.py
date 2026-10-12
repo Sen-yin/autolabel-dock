@@ -41,6 +41,10 @@ class ClassPickerPopup(QDialog):
 
         self._classes = list(classes)
         self._new_class: str | None = None  # track if user typed a new class
+        # Track the item the user actually clicked, so ``get_selected_class``
+        # returns the clicked item (not whatever ``_on_input_changed``
+        # auto-selected while filtering the list).
+        self._clicked_item: QListWidgetItem | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -117,7 +121,12 @@ class ClassPickerPopup(QDialog):
         self.accept()
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
-        """Accept on single click."""
+        """Accept on single click — use the item the user actually clicked."""
+        # Save the clicked item so ``get_selected_class`` returns it even when
+        # ``_on_input_changed`` has auto-selected a different row during
+        # filtering. Without this, clicking a row that doesn't match the
+        # current filter input would silently return the auto-selected row.
+        self._clicked_item = item
         self._new_class = None
         self._input.clear()  # clear filter
         self.accept()
@@ -147,7 +156,14 @@ class ClassPickerPopup(QDialog):
             self.reject()
 
     def get_selected_class(self) -> str | None:
-        """Return the selected class name (existing or newly typed)."""
+        """Return the selected class name (clicked, typed, or highlighted).
+
+        Priority: clicked item > typed new class > currently selected row.
+        The clicked item wins so that a click returns what the user clicked,
+        even if the input filter has auto-selected a different row.
+        """
+        if self._clicked_item is not None:
+            return self._clicked_item.text()
         if self._new_class:
             return self._new_class
         item = self._list.currentItem()
@@ -156,7 +172,13 @@ class ClassPickerPopup(QDialog):
         return None
 
     def get_selected_index(self) -> int:
-        """Return the selected class index, or -1 for new classes."""
+        """Return the selected class index, or -1 for new classes.
+
+        Priority mirrors ``get_selected_class``: clicked item > typed new
+        class > currently selected row.
+        """
+        if self._clicked_item is not None:
+            return self._list.row(self._clicked_item)
         if self._new_class:
             return -1
         return self._list.currentRow()

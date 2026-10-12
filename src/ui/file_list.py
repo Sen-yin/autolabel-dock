@@ -133,8 +133,13 @@ class FileListWidget(QListWidget):
         statuses: dict[str, str] | None = None,
         classes: dict[str, set[str]] | None = None,
         tags: dict[str, set[str]] | None = None,
+        _selected_row: int | None = None,
     ) -> None:
         """Set the list of image paths to display.
+
+        ``_selected_row`` (private, used by ``refresh_paths``) selects that
+        row after the rebuild so ``_apply_filter`` uses a valid current row
+        and does not reset the scrollbar to 0.
 
         The optional keyword maps bulk-replace the per-image metadata caches
         atomically with the rebuild (project open passes all three from its
@@ -161,6 +166,10 @@ class FileListWidget(QListWidget):
             item.setForeground(QColor(STATUS_COLORS.get(status, PALETTE["text_subtle"])))
             self.addItem(item)
             self._row_by_path[path_str] = row
+        # Set the current row BEFORE the filter so the filter's
+        # scroll-positioning logic can use it instead of defaulting to 0.
+        if _selected_row is not None and 0 <= _selected_row < self.count():
+            self.setCurrentRow(_selected_row)
         self._apply_filter()
         self.blockSignals(False)
 
@@ -305,8 +314,19 @@ class FileListWidget(QListWidget):
                 self.setCurrentRow(i)
                 return
 
-    def refresh_paths(self, paths: list[Path]) -> None:
+    def refresh_paths(
+        self,
+        paths: list[Path],
+        *,
+        selected_row: int | None = None,
+    ) -> None:
         """Refresh file list, preserving statuses, selection, and scroll position.
+
+        ``selected_row`` forces the list to select that row (0-based) after the
+        rebuild. This is required when the previously-selected image no longer
+        exists (e.g. after a delete) and we want to land on its neighbor.
+        The row is set before ``_apply_filter`` so the filter does not
+        incorrectly reset the scrollbar to 0.
 
         Skips the rebuild when ``paths`` matches the currently-displayed paths
         in the same order — clearing and re-populating a QListWidget resets
@@ -320,14 +340,22 @@ class FileListWidget(QListWidget):
         if new_keys == old_keys:
             return
         current = self.get_current_path()
+        # Capture the visual scroll position BEFORE the rebuild, then
+        # restore it AFTER. We clamp to the new maximum so a shorter list
+        # doesn't accidentally pin the viewport to the bottom (which the
+        # user would perceive as "scrolled to the end" rather than "kept
+        # my place"). The rebuild itself calls ``_apply_filter`` which
+        # forces scroll=0 when the current row is invalid, so this
+        # restoration is what actually keeps the list in place.
         scroll_value = self.verticalScrollBar().value()
         self._paths = list(paths)
-        self.set_image_paths(paths)
-        if current:
+        self.set_image_paths(paths, _selected_row=selected_row)
+        if current and selected_row is None:
             row = self._row_by_path.get(str(current))
             if row is not None:
                 self.setCurrentRow(row)
-        self.verticalScrollBar().setValue(scroll_value)
+        sb = self.verticalScrollBar()
+        sb.setValue(min(scroll_value, sb.maximum()))
 
     def get_paths(self) -> list[Path]:
         """Return a copy of the current image paths list."""
